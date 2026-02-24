@@ -2,25 +2,74 @@
 
 set -euo pipefail
 
-COUNT=0
-MAX=5
+MAX_SIGTERMS=5
+SIGTERM_COUNT=0
+CHILD_PIDS=()
 
-handle_sigterm() {
-    COUNT=$((COUNT + 1))
-    echo "Received SIGTERM (${COUNT}/${MAX})"
+#######################################
+# Child process logic
+#######################################
+child_process() {
+    CHILD_ID="$1"
 
-    if [[ "$COUNT" -ge "$MAX" ]]; then
-        echo "Received SIGTERM ${MAX} times. Exiting..."
+    child_sigterm() {
+        echo "[Child ${CHILD_ID} | PID $$] received SIGTERM"
+    }
+
+    trap child_sigterm SIGTERM
+
+    echo "[Child ${CHILD_ID} | PID $$] alive"
+
+    while true; do
+        sleep 2
+    done
+}
+
+#######################################
+# Parent SIGTERM handler
+#######################################
+parent_sigterm() {
+    SIGTERM_COUNT=$((SIGTERM_COUNT + 1))
+
+    echo "[Parent $$] received SIGTERM (${SIGTERM_COUNT}/${MAX_SIGTERMS})"
+
+    echo "[Parent $$] forwarding SIGTERM to children..."
+
+    for pid in "${CHILD_PIDS[@]}"; do
+        kill -TERM "$pid" 2>/dev/null || true
+    done
+
+    if [[ "$SIGTERM_COUNT" -ge "$MAX_SIGTERMS" ]]; then
+        echo "[Parent $$] received 5 SIGTERMs — shutting down"
+
+        for pid in "${CHILD_PIDS[@]}"; do
+            kill -TERM "$pid" 2>/dev/null || true
+        done
+
+        wait
         exit 0
     fi
 }
 
-trap handle_sigterm SIGTERM
+trap parent_sigterm SIGTERM
 
-echo "Container started. PID=$$"
-echo "Waiting for SIGTERM signals..."
+#######################################
+# Spawn random children
+#######################################
+NUM_CHILDREN=$((RANDOM % 5 + 2))
 
-# Keep process alive
+echo "[Parent $$] spawning ${NUM_CHILDREN} children"
+
+for i in $(seq 1 "$NUM_CHILDREN"); do
+    child_process "$i" &
+    CHILD_PIDS+=($!)
+done
+
+echo "[Parent $$] children: ${CHILD_PIDS[*]}"
+
+#######################################
+# Parent stays alive
+#######################################
 while true; do
     sleep 1
 done
